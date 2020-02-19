@@ -2,6 +2,7 @@
 #include <iostream>
 #include <fstream>
 #include <sstream>
+#include <algorithm>
 #include <LRSpline/LRSplineSurface.h>
 #ifdef HAS_GOTOOLS
   #include <GoTools/geometry/SplineSurface.h>
@@ -100,7 +101,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
 			mexErrMsgTxt("Save: Unexpected arguments.");
 		// rewrap filename from mxArray to char*
 		int len = mxGetM(prhs[2]) * mxGetN(prhs[2]);
-		char filename[len+1];
+        char* filename = new char[len+1];
 		mxGetString(prhs[2], filename, len+1); // adds a terminal 0-character by itself
 		// write the object to file
 		ofstream out;
@@ -108,6 +109,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
 		lr->write(out);
 		// clean up and exit
 		out.close();
+		delete filename;
 		return;
 	}
 
@@ -118,7 +120,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
 			mexErrMsgTxt("Load: Unexpected arguments.");
 		// rewrap filename from mxArray to char*
 		int len = mxGetM(prhs[2]) * mxGetN(prhs[2]);
-		char filename[len+1];
+        char* filename = new char[len+1];
 		mxGetString(prhs[2], filename, len+1); // adds a terminal 0-character by itself
 		// write the object to file
 		ifstream in;
@@ -126,6 +128,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
 		lr->read(in);
 		// clean up and exit
 		in.close();
+        delete filename;
 		return;
 	}
 
@@ -137,7 +140,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
 			mexErrMsgTxt("Load: Unexpected arguments.");
 		// rewrap filename from mxArray to char*
 		int len = mxGetM(prhs[2]) * mxGetN(prhs[2]);
-		char filename[len+1];
+		char* filename = new char[len+1];
 		mxGetString(prhs[2], filename, len+1); // adds a terminal 0-character by itself
 		// read the spline surface from input file
 		ifstream in;
@@ -147,6 +150,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
     in >> head >> surf;
 		// clean up and exit
 		in.close();
+		delete filename;
     // create LR-spline object from GoTools object
     delete lr;
     lr = new LRSplineSurface(&surf);

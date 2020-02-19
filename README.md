@@ -9,12 +9,26 @@ LR B-splines is a technology which enables users to perform local refinement on 
 
 This is a matlab wrapper over the core c++ library. You will have to compile the c++ library first, followed by linking the `.mex` files provided here to this library. This will in turn allow give you the full power of a fast c++ library with the convenient matlab syntax on top.
 
-## Compiling on Ubuntu
+## Compiling on Windows
 
-Assuming you have installed [LR B-splines](https://github.com/VikingScientist/LRsplines) and have a version of [Matlab](https://se.mathworks.com/products/matlab.html) installed, then the library is compiled and linked by simply typing
-```
-cmake .
-make
-```
-in the root folder.
+1. Make sure the eigen library is properly included in the file `MatlabLR/src/Basisfunction.cpp``, e.g.
 
+    #include "eigen3\Eigen\Dense"
+
+and make sure the library is found.
+
+2. Next, run the following command in matlab (when standing in the MatlabLR folder):
+
+mex -outdir lib src\lrsplinesurface_interface.cpp src\LRSplineSurface.cpp src\Basisfunction.cpp src\Element.cpp src\LRSplineVolume.cpp src\Meshline.cpp src\MeshRectangle.cpp src/LRspline.cpp -Iinclude
+
+3. Copy everything from MatlabLR/src/matlab to MatlabLR/lib
+
+4. Test the code by running the following commands:
+
+    addpath('lib/')
+    lr = LRSplineSurface([3,3], [4,4])
+    lr.refine()
+    lr.raiseOrder(2,2)
+    lr.refine(44)
+    lr.refine(64)
+    lr.plot('enumerate', 'basis')
