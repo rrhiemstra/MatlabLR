@@ -19,8 +19,8 @@ fprintf(fileID,'%s\n\n','\documentclass[crop=true,a4paper]{standalone}');
 fprintf(fileID,'%s\n\n','\input{preamble.tex}'); % include preamble
 fprintf(fileID,'%s%s%s\n\n','\input{',filename,'.dat}'); % add data to file
 
-fprintf(fileID,'%s\n %s\n %s\n\n','\def\tkzscale{10.0}',...
-    '\def\dirdata{../data}',...
+fprintf(fileID,'%s\n %s\n\n',...
+    '\def\tkzscale{10.0}',...
     '\tikzexternaldisable');
 
 % write main user-defined parameters
@@ -48,6 +48,168 @@ fprintf(fileID,'%s\n','\end{document}');
 fclose(fileID);
     
 end
+
+% extract the local knot-vectors in tems of break-points and multiplicities
+function U = extract_local_knot_vectors(lrsplinesurface)
+    kts   = lrsplinesurface.knots;
+    n = size(kts,1);     % number of basis functions
+        
+    % New containers for unique knots and their multiplicities
+    U = cell(n,2);
+    for j=1:2
+        for i=1:n
+            [u, ia, ic] = unique(kts{i,j});
+            mult = [diff(ia)' length(ic)-ia(end)+1];
+            U{i,j} = [u; mult];
+        end
+    end
+end
+
+% Determine the continuity over element boundaries
+function C = determine_continuity_over_mesh_edges(elements, support, U)
+
+    % number of elements
+    m = size(support,1);
+
+    % Preallocate list with continuities over element boundaries
+    C = 1000*ones(m,4);
+    
+    % loop over elements
+    for i=1:m
+        K = support{i}; % function indices
+        
+        % loop over functions that have support in this element
+        X = [elements(i,1) elements(i,3)];  % lower-left coordinate element
+        for k=1:length(K)
+            % take care of u-direction
+            q = sum(U{K(k),1}(2,:))-2; % function degree
+            for j=1:2
+                J = 6-2*j;
+                nu = U{K(k),1}(2, U{K(k),1}(1,:)==X(j)); % knot multiplicity
+                if ~isempty(nu)
+                    c = q - nu; % continuity at knot
+                    if c<C(i,J)
+                        C(i,J) = c;
+                    end
+                end
+            end
+        end
+        
+        % loop over functions that have support in this element
+        Y = [elements(i,2) elements(i,4)];  % lower-left coordinate element
+        for k=1:length(K)
+            % take care of u-direction
+            q = sum(U{K(k),2}(2,:))-2; % function degree
+            for j=1:2
+                J = 2*j-1;
+                nu = U{K(k),2}(2, U{K(k),2}(1,:)==Y(j)); % knot multiplicity
+                if ~isempty(nu)
+                    c = q - nu; % continuity at knot
+                    if c<C(i,J)
+                        C(i,J) = c;
+                    end
+                end
+            end
+        end
+    end
+end
+
+% extract all unique vertices from the lr-spline mesh and provide mapping
+% from elements to the vertices
+function [Q, IC] = extract_unique_vertices(lrsplinesurface)
+    E = lrsplinesurface.elements;
+    P = [E(:,1) E(:,2); E(:,3) E(:,2); E(:,3) E(:,4); E(:,1) E(:,4)];
+    [Q, ~, ic] = unique(P,'rows');
+  
+    m = size(E,1);
+    IC = reshape(ic, m, 4);
+end
+
+% generate a graph with half-edge information
+function S = make_vertex_vertex_graph(Q, IC)
+    n = size(Q,1);
+    m = size(IC,1);
+    S = sparse(n,n);
+    for k=1:m
+        ic = IC(k,:);
+        
+        % add halfedges
+        S(ic(1),ic(2)) = 3; S(ic(2),ic(1)) = 1;
+        S(ic(2),ic(3)) = 4; S(ic(3),ic(2)) = 2;
+        S(ic(3),ic(4)) = 1; S(ic(4),ic(3)) = 3;
+        S(ic(4),ic(1)) = 2; S(ic(1),ic(4)) = 4;
+    end
+end
+
+% write data to .dat file
+function [Q, F] = extract_face_vertex_data(lrsplinesurface)
+
+    % get the unique vertices
+    [Q, IC] = extract_unique_vertices(lrsplinesurface);
+    
+    % generate a graph with vertex-vertex connectivity and halfedge info
+    S = make_vertex_vertex_graph(Q, IC);
+
+    % build face-vertex graph from S
+    m = size(IC,1);
+    F = cell(m,2);
+    for k=1:m
+        current_v = IC(k,1); % index of current vertex is the first index of the element
+        [i, ~, v] = find(S(:,current_v)); % go to current vertex
+        K = 1; % which is of type K==1
+        
+        e = [current_v];
+        f = [];
+        while K<5
+            next_v = i(v==K); % index of next vertex
+            L = length(next_v);
+            if L==0 % there is no to-vertex of type K
+                K = K-1; % Increase K
+            else
+                % if there are multiple to-vertices of type K then we need to find the correct one with minimum length
+                if L>0
+                    [~, j] = min(vecnorm((Q(next_v,:) - repmat(Q(current_v,:),L,1))', 2));
+                    next_v = next_v(j);
+                end
+                e = [e next_v]; % add 'to-point' of edge K
+                f = [f K];
+                current_v = next_v; % update index of current vertex
+                K = K+1; % Increase K
+                [i, ~, v] = find(S(:,current_v)); % go to current vertex
+            end
+        end
+        
+        F{k,1} = e;
+        F{k,2} = f;
+    end
+end
+
+% function E = extract_halfedge_data(Q, F)
+% 
+%     % initialize
+%     n = size(Q,1);
+%     m = size(F,1);
+%     
+%     % determine number of halfedges
+%     z = 0;
+%     for i=1:m
+%         z = z+length(F{i,1})-1;
+%     end
+%     
+%     % fill halfedges
+%     H = zeros(z,2);
+%     k = 1;
+%     for i=1:m
+%         f = F{i,1};
+%         for j=1:length(f)-1
+%             H(k,1:2) = f(j:j+1);
+%             k = k+1;
+%         end
+%     end
+%     [E, ia, ic] = unique(sort(H,2),'rows');
+%     
+%     E = 0;
+% end
 
 % check filename extension
 function check_filename_extension(ext)
@@ -180,10 +342,15 @@ function write_data_to_texfile(fileID, lrsplinesurface)
     cp    = lrsplinesurface.cp';
     elements = lrsplinesurface.elements;
     support  = lrsplinesurface.support;
-
+    
     m = size(p,1);      % number of elements
     n = size(cp,1);     % number of basis functions
     
+    % compute lr-mesh data
+    U = extract_local_knot_vectors(lrsplinesurface);
+    C = determine_continuity_over_mesh_edges(elements, support, U);
+    [Q, F] = extract_face_vertex_data(lrsplinesurface);
+
     % determine size of the supports
     d = zeros(n,1);
     for k=1:n
@@ -263,10 +430,10 @@ function write_data_to_texfile(fileID, lrsplinesurface)
         '\readlist\uknots{');
     for k=1:n
         K = I(k);
-        [u, ia, ic] = unique(kts{K,1});
-        
+        u = U{K,1}(1,:);
+        mult = U{K,1}(2,:);
         V = strcat(sprintf('%0.6f,' , u(1:end-1)), num2str(u(end)));
-        M = strcat(sprintf('%d,' , diff(ia)), num2str(length(ic)-ia(end)+1));
+        M = strcat(sprintf('%0.6f,' , mult(1:end-1)), num2str(mult(end)));
         fprintf(fileID,'%s;%s/', V, M);
     end
     fprintf(fileID,'}\n\n');
@@ -276,40 +443,59 @@ function write_data_to_texfile(fileID, lrsplinesurface)
         '\readlist\vknots{');
     for k=1:n
         K = I(k);
-        [v, ia, ic] = unique(kts{K,2});
-        V = strcat(sprintf('%0.6f,' , v(1:end-1)), num2str(v(end)));
-        M = strcat(sprintf('%d,' , diff(ia)), num2str(length(ic)-ia(end)+1));
+        u = U{K,2}(1,:);
+        mult = U{K,2}(2,:);
+        V = strcat(sprintf('%0.6f,' , u(1:end-1)), num2str(u(end)));
+        M = strcat(sprintf('%0.6f,' , mult(1:end-1)), num2str(mult(end)));
         fprintf(fileID,'%s;%s/', V, M);
     end
+    fprintf(fileID,'}\n\n');
+
+    % print mesh vertex data
+    fprintf(fileID,'%s\n%s\n',...
+        '\setsepchar{;}',...
+        '\readlist\nodes{');
+    for i=1:size(Q,1)
+        fprintf(fileID,'%s;',Coord(Q(i,:)));
+    end
+    fprintf(fileID,'}\n\n');
+    
+    % print face to edge data
+    fprintf(fileID,'%s\n%s\n',...
+        '\setsepchar[ ]{; ,}',...
+        '\readlist\faces{');
+    for k=1:m
+        f = F{k,1};
+        s = strcat(sprintf('%d,', f(1:end-1)), num2str(f(end)));
+        fprintf(fileID,'%s;',s);
+    end    
+    fprintf(fileID,'}\n\n');
+    
+    % add continuity over mesh edges
+    fprintf(fileID,'%s\n%s\n',...
+        '\setsepchar[ ]{; ,}',...
+        '\readlist\continuity{');
+    for k=1:m
+        s = C(k,F{k,2});
+        c = strcat(sprintf('%d,', s(1:end-1)), num2str(s(end)));
+        fprintf(fileID,'%s;',c);
+    end
     fprintf(fileID,'}\n\n\n');
-
 end
-
-
-% function compute_continuity_across_mesh_edges(lrsplinesurface)
-%     
-%     initialize
-%     p     = lrsplinesurface.p;
-%     kts   = lrsplinesurface.knots;
-%     cp    = lrsplinesurface.cp';
-%     elements = lrsplinesurface.elements;
-%     support  = lrsplinesurface.support;
-% 
-%     loop over elements
-%     for k=1:length(support)
-%         function_indices = support{k};
-%         for i=1:length(function_indices)
-%             fun = function_indices(i);
-%             kts{fun,1}
-%     end
-% end
-
 
 function write_userinput_to_tikzfile(fileID)
 
-fprintf(fileID,'%s\n%s\n\n',...
+fprintf(fileID,'%s\n %s\n %s\n %s\n %s\n %s\n %s\n %s\n %s\n %s\n\n',...
     '% choose a color foreach polynomial degree, see https://en.wikibooks.org/wiki/LaTeX/Colors',...
-    '\readlist\colorlist{yellow/orange/red/magenta/blue/cyan/green}');
+    '\definecolor{gray1}{gray}{0.95}',...
+    '\definecolor{gray2}{gray}{0.75}',...
+    '\definecolor{gray3}{gray}{0.55}',...
+    '\definecolor{gray4}{gray}{0.35}',...
+    '\definecolor{gray5}{gray}{0.15}',...
+    '\definecolor{gray6}{gray}{0.05}',...
+    '\setsepchar{,}',...
+    '\readlist\colorlist{gray1,gray2,gray3,gray4,gray5,gray6}',...
+    '%\readlist\colorlist{yellow,orange,red,magenta,blue,cyan,green}');
 
 % User defined styles
 fprintf(fileID,'%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n',...
@@ -327,6 +513,16 @@ fprintf(fileID,'%s\n%s\n%s\n%s\n',...
     '   % Define style used to draw element numbers',...
     '   enumber/.style 2 args={',...
     '       label={[black,opacity=0.5,scale=\tkzscale*0.03*#2]center:{\scriptsize #1}},',...
+    '   },');
+fprintf(fileID,'%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n',...
+    '   % Define style used to draw control point numbers',...
+    '   cnumber/.style 2 args={',...
+    '	  draw,',...
+    '	  circle,',...
+    '	  fill=white,',...
+    '	  inner sep=0pt,',...
+    '	  minimum size={\tkzscale*0.1*#2+5},',...
+    '      label={[black,opacity=1,scale=\tkzscale*0.015*#2+0.5]center:{\scriptsize #1}},',...
     '   },');
 fprintf(fileID,'%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n',...
     '   % Define style used to draw control points',...
@@ -484,6 +680,23 @@ fprintf(fileID,'%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n
     '       \listdiffmacro{\vknots[\k,1,1]}{\vknots[\k,1,-1]}{\t}',...
     '       \draw \grevillepoint[\k] node[inner sep=0cm, controlpoint={\s}{\t}{\p-2}, cpnumber={\k}{0.5*\s+0.5*\t}] {};',...
     '   }',...
+    '}');
+
+fprintf(fileID,'%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n',...
+    '% Draw the continuity over every mesh-edges',...
+    '\foreach \i in \elemlist{',...
+    '	\itemtolist{\faces[\i]}{\F} % face-vertex data',...
+    '	\itemtolist{\continuity[\i]}{\C} % continuity over mesh edges data',...
+    '	\foreach \k in {1,...,\listlen\C[]}{',...
+    '	   \itemtomacro\F[\k]\ia',...
+    '      \itemtomacro\F[\k+1]\ib',...
+    '		\draw \nodes[\ia] -- \nodes[\ib];',...
+    '		\draw let',...
+    '			\p1 = \nodes[\ia],',...
+    '			\p2 = \nodes[\ib],',...
+    '           \n1 = {veclen((\x2-\x1),(\y2-\y1))}',...
+    '			in ($(.5*\x1+.5*\x2, .5*\y1+.5*\y2)$)  node [cnumber={\C[\k]}{\n1} ] {} {};',...
+    '	}',...
     '}');
 
 end
